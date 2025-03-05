@@ -35,7 +35,7 @@ public class RecordUploader extends Thread {
                     UploadEvent uploadEvent = queue.take();
                     // TODO: Uncomment the following line if want to see the result in progress
                     // Comment it since print will severely slow the program
-                    //System.out.println("Uploading event: " + uploadEvent.toString());
+                    System.out.println("Uploading event: " + uploadEvent.toString());
                     Integer result = recordUploadClient.uploadLift(uploadEvent);
                     outputQueue.put(result);
                 }
