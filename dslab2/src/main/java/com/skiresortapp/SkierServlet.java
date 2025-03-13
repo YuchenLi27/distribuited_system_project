@@ -1,8 +1,11 @@
 package com.skiresortapp;
 
+import com.amazonaws.services.sqs.AmazonSQS;
+import com.amazonaws.services.sqs.AmazonSQSClientBuilder;
+import com.amazonaws.services.sqs.model.SendMessageRequest;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
-import com.skiresortapp.bean.ErrorMessage;
+import com.skiresortapp.bean.*;
 
 import javax.servlet.*;
 import javax.servlet.http.*;
@@ -13,19 +16,18 @@ import java.util.List;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.skiresortapp.bean.LiftRide;
-import com.skiresortapp.bean.SkierVerticalRecord;
-import com.skiresortapp.bean.SkierVerticalRecords;
 
 
 @WebServlet(value = "/skiers/*")
 public class SkierServlet extends HttpServlet {
+    private static final String QUEUE_URL = "https://sqs.us-west-2.amazonaws.com/179327391440/dsSQSqueue";
+    private static final AmazonSQS sqsClient = AmazonSQSClientBuilder.defaultClient();
+
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
         response.setContentType("text/plain");
         response.setCharacterEncoding("UTF-8");
         String urlPath = request.getPathInfo();
-
         // check if we have a URL
         if (urlPath == null || urlPath.isEmpty()) {
             sendErrorResponse(response, HttpServletResponse.SC_BAD_REQUEST, "Error form check url path: missing parameters.");
@@ -47,7 +49,7 @@ public class SkierServlet extends HttpServlet {
             }
 
             String resort = request.getParameter("resort");
-            String season = request.getParameter("season");
+            String season = request.getParameter("seasonId");
 
             if (resort == null || resort.isEmpty()) {
                 sendErrorResponse(response, HttpServletResponse.SC_BAD_REQUEST, "Missing resort parameter.");
@@ -130,19 +132,37 @@ public class SkierServlet extends HttpServlet {
         }
 
         int resortID = Integer.parseInt(urlParts[1]);
-        int seasonID = Integer.parseInt(urlParts[3]);
-        int dayID = Integer.parseInt(urlParts[5]);
+        String seasonID = urlParts[3];
+        String dayID = urlParts[5];
         int skierID = Integer.parseInt(urlParts[7]);
+        LiftRide liftRide;
+
         try {
-            LiftRide lifeRide = new Gson().fromJson(requestBody.toString(), LiftRide.class);
+            liftRide = new Gson().fromJson(requestBody.toString(), LiftRide.class);
         } catch (JsonSyntaxException e) {
             sendErrorResponse(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid Request Body");
+            return;
         }
+
+        SqsMessageBody sqsMessageBody = new SqsMessageBody(resortID, seasonID, dayID,skierID, liftRide);
+        String messageBody = new Gson().toJson(sqsMessageBody);
+        sendMessageToSQS(messageBody);
 
         // TODO: store lift ride for corresponding resort, season, day, and skier.
         response.setStatus(HttpServletResponse.SC_CREATED);
         // There are no response body according to the Swagger spec for this POST request.
         response.getWriter().flush();
+    }
+    private void sendMessageToSQS(String messageBody){
+        try{
+            SendMessageRequest sendMessageRequest = new SendMessageRequest()
+                    .withQueueUrl(QUEUE_URL)
+                    .withMessageBody(messageBody);
+            sqsClient.sendMessage(sendMessageRequest);
+            System.out.println("Message sent to SQS" + messageBody);
+        } catch (Exception e) {
+            System.out.println("Error while sending message: " + e.getMessage());
+        }
     }
 
     private boolean isValidUrl(String[] urlPath) {
@@ -189,5 +209,6 @@ public class SkierServlet extends HttpServlet {
         response.getWriter().write(new Gson().toJson(new ErrorMessage(message)));
         response.getWriter().flush();
     }
+
 }
 
