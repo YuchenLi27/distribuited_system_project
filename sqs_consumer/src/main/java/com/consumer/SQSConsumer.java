@@ -18,22 +18,24 @@ public class SQSConsumer {
     private static final Logger logger = LogManager.getLogger(SQSConsumer.class);
 
     private static final String QUEUE_URL = "https://sqs.us-west-2.amazonaws.com/179327391440/dsSQSqueue"; // Replace  queue URL
-    private static final int THREAD_POOL_SIZE = 50;
+    private static final int THREAD_POOL_SIZE = 8;
     private static final ConcurrentHashMap<String, SqsMessageBody> messageMap = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
+        SqsClient sqsClient = SqsClient.builder()
+                .credentialsProvider(DefaultCredentialsProvider.create())
+                .region(Region.of("us-west-2"))
+                .build();
+
         // Create an SQS client
         try {
-
             ExecutorService executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
             logger.info("new message received");
 
             for (int i = 0; i < THREAD_POOL_SIZE; i++) {
                 logger.info("creating one new thread");
-                executorService.submit(() -> receiveMessages()); // Continuously receive messages
+                executorService.submit(() -> receiveMessages(sqsClient)); // Continuously receive messages
             }
-
-//            receiveMessages(sqsClient);
 
             // Initiate a graceful shutdown after submitting all tasks
             executorService.shutdown();
@@ -49,18 +51,13 @@ public class SQSConsumer {
         }
     }
 
-    private static void receiveMessages() {
-        SqsClient sqsClient = SqsClient.builder()
-                .credentialsProvider(DefaultCredentialsProvider.create())
-                .region(Region.of("us-west-2"))
-                .build();
-
+    private static void receiveMessages(SqsClient sqsClient) {
         while (true) {
             try {
                 logger.info("{} receiving message", Thread.currentThread().getName());
                 ReceiveMessageRequest receiveMessageRequest = ReceiveMessageRequest.builder()
                         .queueUrl(QUEUE_URL)
-                        .maxNumberOfMessages(10)
+                        .maxNumberOfMessages(5)
                         .waitTimeSeconds(20) // Long polling for 20 seconds
                         .build();
                 ReceiveMessageResponse receiveMessageResponse = sqsClient.receiveMessage(receiveMessageRequest);
@@ -73,8 +70,8 @@ public class SQSConsumer {
                     logger.info("{} Message received", Thread.currentThread().getName());
                     for (Message message : messages) {
                         processMessage(message);
-                        deleteMessage(sqsClient, message);
                     }
+                    deleteMessage(sqsClient, messages);
                 }
             } catch (SqsException e) {
                 logger.info("{} Error receiving messages: {}", Thread.currentThread().getName(), e.getMessage());
@@ -87,7 +84,6 @@ public class SQSConsumer {
             // Store the message into the thread-safe ConcurrentHashMap
             SqsMessageBody messageBody = new Gson().fromJson(message.body(), SqsMessageBody.class);
             logger.info("Message body is ready");
-            logger.info(message.body());
             messageMap.put(message.messageId(), messageBody);
 
         } catch (Exception e) {
@@ -95,17 +91,25 @@ public class SQSConsumer {
         }
     }
 
-    private static void deleteMessage(SqsClient sqsClient, Message message) {
-        DeleteMessageRequest deleteMessageRequest = DeleteMessageRequest.builder()
-                .queueUrl(QUEUE_URL)
-                .receiptHandle(message.receiptHandle())
-                .build();
-
+    private static void deleteMessage(SqsClient sqsClient, List<Message> messages) {
+        if (messages.isEmpty()) return;
         try {
-            logger.info("Deleting message");
-            sqsClient.deleteMessage(deleteMessageRequest);
+            List<DeleteMessageBatchRequestEntry> entries = messages.stream()
+                    .map(message -> DeleteMessageBatchRequestEntry.builder()
+                            .id(message.messageId())
+                            .receiptHandle(message.receiptHandle())
+                            .build())
+                    .collect(java.util.stream.Collectors.toList());
+
+            DeleteMessageBatchRequest deleteRequest = DeleteMessageBatchRequest.builder()
+                    .queueUrl(QUEUE_URL)
+                    .entries(entries)
+                    .build();
+
+            sqsClient.deleteMessageBatch(deleteRequest);
+            logger.info("Deleted {} messages in batch", messages.size());
         } catch (SqsException e) {
-            logger.error("Error deleting message: {}", e.getMessage());
+            logger.error("Error deleting messages in batch: {}", e.getMessage());
         }
     }
 }

@@ -15,22 +15,22 @@
 
     <Loggers>
         <!-- Root logger level set to INFO, using Console appender -->
-        <Root level="info">
+        <Root level="error">
             <AppenderRef ref="File" />
         </Root>
 
         <!-- AWS SDK logs set to DEBUG level -->
-        <Logger name="software.amazon.awssdk" level="info" additivity="false">
+        <Logger name="software.amazon.awssdk" level="error" additivity="false">
             <AppenderRef ref="File" />
         </Logger>
 
         <!-- Additional AWS SDK logs set to DEBUG level -->
-        <Logger name="com.amazonaws" level="info" additivity="false">
+        <Logger name="com.amazonaws" level="error" additivity="false">
             <AppenderRef ref="File" />
         </Logger>
 
         <!-- Custom application logs (com.consumer) set to INFO level -->
-        <Logger name="com.consumer" level="info" additivity="false">
+        <Logger name="com.consumer" level="error" additivity="false">
             <AppenderRef ref="File" />
         </Logger>
     </Loggers>
