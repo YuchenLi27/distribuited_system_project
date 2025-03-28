@@ -16,4 +16,23 @@ public class SqsMessageBody {
 
     }
 
+    public int getResortId() {
+        return resortId;
+    }
+
+    public String getSeasonId() {
+        return seasonId;
+    }
+
+    public String getDayId() {
+        return dayId;
+    }
+
+    public int getSkierId() {
+        return skierId;
+    }
+
+    public LiftRide getLiftRide() {
+        return liftRide;
+    }
 }
