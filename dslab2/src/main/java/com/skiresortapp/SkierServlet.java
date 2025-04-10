@@ -12,22 +12,34 @@ import javax.servlet.http.*;
 import javax.servlet.annotation.*;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
+import software.amazon.awssdk.services.dynamodb.model.*;
 
 
 @WebServlet(value = "/skiers/*")
 public class SkierServlet extends HttpServlet {
     private static final String QUEUE_URL = "https://sqs.us-west-2.amazonaws.com/179327391440/dsSQSqueue";
     private static final AmazonSQS sqsClient = AmazonSQSClientBuilder.defaultClient();
+    private static final DynamoDbClient ddb = DynamoDbClient.builder()
+            .region(Region.US_WEST_2)
+            .build();
+
 
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
         response.setContentType("text/plain");
         response.setCharacterEncoding("UTF-8");
         String urlPath = request.getPathInfo();
+
+
         // check if we have a URL
         if (urlPath == null || urlPath.isEmpty()) {
             sendErrorResponse(response, HttpServletResponse.SC_BAD_REQUEST, "Error form check url path: missing parameters.");
@@ -48,8 +60,8 @@ public class SkierServlet extends HttpServlet {
                 return;
             }
 
-            String resort = request.getParameter("resort");
-            String season = request.getParameter("seasonId");
+            String resort = urlParts[1];
+            String season = urlParts[3];
 
             if (resort == null || resort.isEmpty()) {
                 sendErrorResponse(response, HttpServletResponse.SC_BAD_REQUEST, "Missing resort parameter.");
@@ -64,30 +76,110 @@ public class SkierServlet extends HttpServlet {
                 sendErrorResponse(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid season parameter.");
                 return;
             }
+            try{
+                int resortID = Integer.parseInt(resort);
+            } catch (NumberFormatException e) {
+                sendErrorResponse(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid resort parameter.");
+                return;
+            }
 
-            response.setStatus(HttpServletResponse.SC_OK);
             // TODO: update the total vertical for response
-            Integer totalVertical = 34507;
-            response.getWriter().write(new Gson().toJson(totalVertical));
-            response.getWriter().flush();
+            Map<String, AttributeValue> keyToGet = new HashMap<>();
+            String skierID = urlParts[7];
+            int dayID = Integer.parseInt(urlParts[5]);
+
+            keyToGet.put(":skierId", AttributeValue.fromS(skierID));
+            keyToGet.put(":dayId", AttributeValue.fromS(String.valueOf(dayID)));
+
+            QueryRequest queryRequest = QueryRequest.builder()
+                    .tableName("SkiResortData")
+                    .keyConditionExpression("skierId = :skierId AND dayId = :dayId")
+                    .expressionAttributeValues(keyToGet)
+                    .build();
+
+            QueryResponse dynamodbResponse = ddb.query(queryRequest);
+
+            try {
+                int totalVertical = 0;
+                for (Map<String, AttributeValue> item : dynamodbResponse.items()) {
+                    if (item.containsKey("vertical")) {
+                        totalVertical += Integer.parseInt(item.get("vertical").n());
+                    }
+                }
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write(new Gson().toJson(totalVertical));
+                response.getWriter().flush();
+
+            } catch (DynamoDbException e) {
+                sendErrorResponse(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            }
 
         } else if (urlParts.length == 3 && urlParts[2].equals("vertical")) {
             // GET /skiers/{skierID}/vertical:
             // get the total vertical for the skier the specified resort. If no season is specified, return all seasons
-            try {
-                int skierID = Integer.parseInt(urlParts[1]);
-            } catch (NumberFormatException e) {
-                sendErrorResponse(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid skier ID.");
+
+            // TODO: Get the vertical records of skier for resorts and build corresponding SkierVerticalRecords response
+
+            String skierId = urlParts[1];
+            if (skierId == null || skierId.isEmpty()) {
+                sendErrorResponse(response, HttpServletResponse.SC_BAD_REQUEST, "Missing skierID parameter.");
                 return;
             }
 
-            // TODO: Get the vertical records of skier for resorts and build corresponding SkierVerticalRecords response
-            SkierVerticalRecord dummyRecord = new SkierVerticalRecord("2018", 33333);
-            SkierVerticalRecords dummyResponse = new SkierVerticalRecords(List.of(dummyRecord));
+            Map<String, AttributeValue> expressionValues = new HashMap<>();
+            expressionValues.put(":skierId", AttributeValue.builder().s(skierId).build());
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(new Gson().toJson(dummyResponse));
-            response.getWriter().flush();
+            try {
+                QueryRequest queryRequest = QueryRequest.builder()
+                        .tableName("SkiResortData")
+                        .keyConditionExpression("skierId = :skierId")
+                        .expressionAttributeValues(expressionValues)
+                        .build();
+
+                QueryResponse dynamodbResponse = ddb.query(queryRequest);
+
+                //to store total vertical per resort and season
+                Map<String, Map<String, Integer>> resortVerticalMap = new HashMap<>();
+
+                for (Map<String, AttributeValue> item : dynamodbResponse.items()) {
+                    String resortId = item.get("resortId").s();
+                    String seasonId = item.get("seasonId").s();
+                    int vertical = Integer.parseInt(item.get("vertical").n());
+
+                    // Update the total vertical for the specific resort and season
+                    resortVerticalMap
+                            .computeIfAbsent(resortId, k -> new HashMap<>())
+                            .merge(seasonId, vertical, Integer::sum);
+                }
+                List<Map<String, Object>> resorts = new ArrayList<>();
+
+                for (Map.Entry<String, Map<String, Integer>> resortEntry : resortVerticalMap.entrySet()) {
+                    String resortId = resortEntry.getKey();
+                    Map<String, Integer> seasonsMap = resortEntry.getValue();
+
+                    for (Map.Entry<String, Integer> seasonEntry : seasonsMap.entrySet()) {
+                        String seasonId = seasonEntry.getKey();
+                        int totalVert = seasonEntry.getValue();
+
+                        // Build a resort response
+                        Map<String, Object> resortResponse = new HashMap<>();
+                        resortResponse.put("seasonID", seasonId);
+                        resortResponse.put("totalVert", totalVert);
+                        resortResponse.put("resortID", resortId);
+                        resorts.add(resortResponse);
+                    }
+                }
+
+                Map<String, Object> responseData = new HashMap<>();
+                responseData.put("resorts", resorts);
+
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write(new Gson().toJson(responseData));
+                response.getWriter().flush();
+
+            } catch (DynamoDbException e) {
+                sendErrorResponse(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            }
         } else {
             sendErrorResponse(response, HttpServletResponse.SC_BAD_REQUEST, "URL not found");
         }
